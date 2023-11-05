@@ -17,7 +17,7 @@ class GarbageCollectorSimple(GarbageCollectorInterface):
     """
     To be written ...
     """
-    def __init__(self, mintime=500000, dirtiness='0.4'):
+    def __init__(self, mintime=500000, dirtiness='0.4', greedy=False):
         getcontext().prec = DECIMAL_PRECISION
 
         # ATTRIBUTES
@@ -33,6 +33,7 @@ class GarbageCollectorSimple(GarbageCollectorInterface):
             It's a Decimal value and must be greater than 0 and maximum equal to 1.
             If it's equal to 1 then a block is cleaned only if all pages are dirty.
         """
+        self.greedy = True
 
         # GARBAGE COLLECTOR INTERNAL STATE
         self._last_run = 0
@@ -59,7 +60,6 @@ class GarbageCollectorSimple(GarbageCollectorInterface):
     @check_block
     def check_gc_block(self, block=0, force_run=False):
         """
-
         :param block:
         :return:
         """

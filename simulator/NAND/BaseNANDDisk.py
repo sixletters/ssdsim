@@ -13,7 +13,7 @@ from simulator.NAND.common import PAGE_EMPTY, PAGE_IN_USE, PAGE_DIRTY, DECIMAL_P
     OPERATION_SUCCESS, OPERATION_FAILED_DIRTY, OPERATION_FAILED_DISKFULL
 from simulator.NAND.common import get_quantized_decimal as qd, check_block, check_page
 from simulator.NAND.common import get_integer_decimal as qz
-
+from math import sqrt
 
 # BaseNANDDISK class
 class BaseNANDDisk(NANDInterface):
@@ -130,6 +130,12 @@ class BaseNANDDisk(NANDInterface):
                 dirty:  total number of dirty pages in the given block.
         """
 
+        # INTERNAL STATE
+        self._death_times = dict()
+        """ This is the death times of the pages.
+            It's an array of blocks. Every block has an array of death times, representing the deathtime of a page.
+        """
+
         # set the decimal context
         getcontext().prec = DECIMAL_PRECISION
 
@@ -137,6 +143,7 @@ class BaseNANDDisk(NANDInterface):
         for b in range(0, self.total_blocks):
             # for every block initialize the page structure
             self._ftl[b] = dict()
+            self._death_times[b] = [-1 for i in range(self.pages_per_block)]
             for p in range(0, self.pages_per_block):
                 # for every page set the empty status
                 self._ftl[b][p] = PAGE_EMPTY
@@ -334,7 +341,7 @@ class BaseNANDDisk(NANDInterface):
     # RAW DISK OPERATIONS
     @check_block
     @check_page
-    def raw_write_page(self, block=0, page=0):
+    def raw_write_page(self, block=0, page=0, death_time=-1):
         """
 
         :param block:
@@ -348,6 +355,8 @@ class BaseNANDDisk(NANDInterface):
         if s == PAGE_EMPTY:
             # change the status of this page
             self._ftl[block][page] = PAGE_IN_USE
+            # update the death time if it is ok
+            self._death_times[block][page] = death_time
 
             # we need to update the statistics
             self._ftl[block]['empty'] -= 1  # we lost one empty page in this block
@@ -437,7 +446,7 @@ class BaseNANDDisk(NANDInterface):
 
     @check_block
     @check_page
-    def host_write_page(self, block=0, page=0, gc_was_forced=False):
+    def host_write_page(self, block=0, page=0, death_time=-1, gc_was_forced=False, run_gc_once=False):
         """
 
         :param block:
@@ -445,10 +454,10 @@ class BaseNANDDisk(NANDInterface):
         :return:
         """
         # check if we need to run the garbage collector
-        self.run_gc(force_run=gc_was_forced)
-
+        self.run_gc(force_run=gc_was_forced, run_once=run_gc_once)
+        
         # execute the write
-        res, status = self.raw_write_page(block=block, page=page)
+        res, status = self.raw_write_page(block=block, page=page, death_time=death_time)
         if res:
             # update statistics
             self._host_page_write_request += 1  # the host actually asked to write a page
@@ -458,10 +467,68 @@ class BaseNANDDisk(NANDInterface):
 
             # force a gc run and retry
             self._gc_forced_count += 1
-            return self.host_write_page(block=block, page=page, gc_was_forced=True)
+            return self.host_write_page(block=block, page=page, death_time=death_time, gc_was_forced=True)
 
         return res, status
+    
+    @check_block
+    @check_page
+    def host_deathtime_page_write(self, block=0, page=0, death_time=-1, gc_was_forced=False):
+        """
+        We inject our deathtime logic plug in here. Instead of writing to the given block and page, we first check
+        if it the block/page is clean, if it is, this means that it is a fresh write and not an update. This means, we can simply, replace with
+        a block/page that has the most similiar death time
+        """
+        # read the FTL to check the current status
+        s = self._ftl[block][page]
 
+        # fresh write
+        if s == PAGE_EMPTY:
+            optimized_block, optimized_page = self.get_min_deathtime_block(block=block, page=page, death_time=death_time)
+            res, status = self.raw_write_page(block=block, page=page, death_time=death_time)
+            if res:
+                # update statistics
+                self._host_page_write_request += 1  # the host actually asked to write a page
+            return res, status
+        # an update, let write policy and GC handle it
+        else:
+            return self.host_write_page(block=0, page=0, death_time=-1, gc_was_forced=False, run_gc_once=True)
+    
+    @check_block
+    @check_page
+    def get_min_deathtime_block(self, block=0, page=0, death_time=-1):
+        """
+        This function returns the block with the most similiar death time. We calculate this as the Root mean square
+        between the current write's death time and all valid page's death time in a block
+        """
+        if death_time == -1:
+            return (block, page)
+        
+        min_deathtime_block =block
+        # maximum deathtime possble
+        mean_root_square = self.total_blocks
+        for block in self._ftl:
+            block_score = self.get_deathtime_score_for_block(block=block, death_time=death_time)
+            if mean_root_square > block_score:
+                mean_root_square = block_score
+                min_deathtime_block = block
+        return min_deathtime_block, self.get_empty_page(block=min_deathtime_block)
+            
+    @check_block
+    @check_page
+    def get_deathtime_score_for_block(self, block=0, death_time=-1):
+        mean_root_square = 0
+        n = 0
+        for page in self._ftl[block]:
+            if page == PAGE_EMPTY:
+                continue
+            mean_root_square += (self._death_times[block][page] - death_time) ** 2
+            n += 1
+        # block is completely empty, return squareroot
+        if n == 0:
+            return sqrt(self._ftl[block])
+        return sqrt(mean_root_square / n)
+        
     @check_block
     @check_page
     def host_read_page(self, block=0, page=0):

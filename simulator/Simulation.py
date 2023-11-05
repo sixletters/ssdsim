@@ -239,8 +239,7 @@ class Simulation(object):
         # status
         print("Updated file '{}'".format(fp))
 
-    @check_init
-    def execute_one_simulation_step(self, index):
+    def execute_one_simulation_step(self, index, use_deathtime=False):
         """
 
         :return:
@@ -252,8 +251,12 @@ class Simulation(object):
 
             while try_again and attempts > 0:
                 # execute
-                res, status = self._disks[d].host_write_page(block=self._samples[d][0][self._samples_drift[d]],
-                                                             page=self._samples[d][1][self._samples_drift[d]])
+                if use_deathtime:
+                    res, status = self._disks[d].host_deathtime_page_write(block=self._samples[d][0][self._samples_drift[d]],
+                                                            page=self._samples[d][1][self._samples_drift[d]])
+                else:
+                    res, status = self._disks[d].host_write_page(block=self._samples[d][0][self._samples_drift[d]],
+                                                                page=self._samples[d][1][self._samples_drift[d]])
 
                 # ok, increase the index
                 self._samples_drift[d] += 1
@@ -318,7 +321,6 @@ class Simulation(object):
 
         return False
 
-    @check_init
     def run(self):
         """
 
@@ -350,7 +352,7 @@ class Simulation(object):
             # in case of SIM_SAMPLING_ELAPSED_TIME we need to remember the last time we gathered the stats
             if self.sim_sampling_type == SIM_SAMPLING_ELAPSED_TIME:
                 self.stats[d]['extra'] = 0  # initial value is 0
-
+        
         print(Fore.GREEN + "OK")
         print(Style.RESET_ALL, end="")
 
@@ -370,7 +372,7 @@ class Simulation(object):
                       end="", flush=True)
 
             # execution
-            self.execute_one_simulation_step(i)
+            self.execute_one_simulation_step(i, use_deathtime=True)
 
             # extract statistics (if needed)
             self.extract_and_store_stats(i)

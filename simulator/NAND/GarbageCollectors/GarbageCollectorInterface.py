@@ -9,6 +9,7 @@ This is the Abstract class interface for all Garbage Collector implementations.
 # IMPORTS
 from abc import ABCMeta, abstractclassmethod
 from simulator.NAND.NANDInterface import NANDInterface
+from simulator.NAND.common import check_block, DECIMAL_PRECISION, PAGE_IN_USE, PAGE_EMPTY, PAGE_DIRTY
 
 
 class GarbageCollectorInterface(NANDInterface, metaclass=ABCMeta):
@@ -32,12 +33,27 @@ class GarbageCollectorInterface(NANDInterface, metaclass=ABCMeta):
     def get_gc_name(self):
         return NotImplemented
 
-    def run_gc(self, force_run=False):
+    def run_gc(self, force_run=False, run_once=False):
         """
 
         :return:
         """
         # check the overall conditions to execute the gc
+        if run_once:
+            max_invalid = 0
+            max_invalid_block = 0
+            for b in range(0, self.total_blocks):
+            # check the conditions on this block
+                invalid_count = 0
+                for page in self._ftl[b]:
+                    if page == PAGE_DIRTY:
+                        invalid_count += 1
+
+                if invalid_count > max_invalid:
+                    max_invalid = invalid_count
+                    max_invalid_block = b
+            return max_invalid_block
+
         if self.check_gc_run(force_run=force_run):
             # run the gc on every block
             execution = False
